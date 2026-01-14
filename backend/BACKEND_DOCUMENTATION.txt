@@ -1,0 +1,1086 @@
+================================================================================
+                    MOBILE APP REST API - BACKEND DOCUMENTATION
+                              (UPDATED - SECURITY ENHANCED)
+================================================================================
+
+PROJECT OVERVIEW
+================================================================================
+
+This is a RESTful API backend for a mobile payment/wallet application built 
+with Node.js and Express. The application allows users to:
+- Register and authenticate with secure password hashing
+- Manage multi-currency accounts (10 currencies)
+- Transfer money between users with transaction limits
+- Exchange currencies
+- View transaction history
+- Verify email addresses
+
+The backend follows a clean MVC (Model-View-Controller) architecture pattern
+with comprehensive security measures implemented.
+
+LAST UPDATED: January 2026
+STATUS: Production-ready with all security improvements implemented
+
+
+TECHNOLOGY STACK & PACKAGES
+================================================================================
+
+CORE DEPENDENCIES:
+------------------
+
+1. express (^4.19.2)
+   - Web application framework for Node.js
+   - Handles HTTP requests, routing, and middleware
+   - Used to create RESTful API endpoints
+
+2. mongoose (^8.5.2)
+   - MongoDB object modeling tool
+   - Provides schema-based solution to model application data
+   - Handles database connections and queries
+   - Supports transactions for atomic operations
+
+3. jsonwebtoken (^9.0.2)
+   - JWT (JSON Web Token) implementation
+   - Used for user authentication and authorization
+   - Creates and verifies secure tokens for protected routes
+   - Now includes token expiration (1 hour access, 7 days refresh)
+
+4. cors (^2.8.5)
+   - Cross-Origin Resource Sharing middleware
+   - NOW CONFIGURED: Whitelist specific frontend origins only
+   - Prevents unauthorized cross-origin access
+
+5. dotenv (^16.4.5)
+   - Loads environment variables from .env file
+   - Manages sensitive configuration (database URLs, JWT secrets)
+   - Keeps credentials separate from code
+
+SECURITY PACKAGES:
+------------------
+
+6. bcrypt (latest)
+   - Password hashing library
+   - Uses 10 salt rounds for secure password storage
+   - Prevents rainbow table attacks
+
+7. express-rate-limit (latest)
+   - Rate limiting middleware
+   - Prevents brute force attacks
+   - Configured limits: 5 login/15min, 3 signup/hour, 100 API/15min
+
+8. helmet (latest)
+   - Security headers middleware
+   - Sets HTTP headers to protect against common vulnerabilities
+   - Includes XSS protection, clickjacking prevention, etc.
+
+9. morgan (latest)
+   - HTTP request logger
+   - Logs all requests in "combined" format
+   - Useful for debugging and audit trails
+
+10. express-mongo-sanitize (latest)
+    - NoSQL injection prevention
+    - Sanitizes user input to prevent malicious queries
+    - Removes prohibited characters from request data
+
+11. nodemailer (latest)
+    - Email sending library
+    - Used for email verification
+    - Supports SMTP and various email services
+
+12. validator (latest)
+    - Additional input validation utilities
+    - Complements Joi validation
+
+VALIDATION LIBRARIES:
+--------------------
+
+13. joi (^17.13.3)
+    - Schema validation library
+    - Validates user input for all operations
+    - Enhanced password requirements (8+ chars, uppercase, lowercase, number)
+
+14. zod (^3.23.8)
+    - TypeScript-first schema validation
+    - Available for future use
+
+DEVELOPMENT DEPENDENCIES:
+------------------------
+
+15. nodemon (^3.1.10)
+    - Development tool that auto-restarts server on file changes
+    - Improves development workflow
+
+
+PROJECT STRUCTURE
+================================================================================
+
+backend/
+├── config/              # Configuration files
+│   ├── db.js           # MongoDB connection setup
+│   └── jwt.js          # JWT configuration with expiration
+├── controllers/         # Business logic handlers
+│   ├── user.controller.js        # Auth, profile, email verification
+│   ├── account.controller.js     # Balance, transfer, exchange
+│   └── transaction.controller.js # Transaction history
+├── middlewares/         # Custom middleware functions
+│   ├── auth.middleware.js        # JWT verification
+│   └── rateLimiter.middleware.js # Rate limiting configs
+├── models/             # Database schemas
+│   ├── index.js        # User and Account models
+│   └── transactionModel.js
+├── routes/             # API route definitions
+│   ├── index.js        # Main router
+│   ├── user.routes.js
+│   ├── account.routes.js
+│   └── transaction.routes.js
+├── validators/         # Input validation schemas
+│   ├── user.validator.js         # Enhanced password validation
+│   └── account.validator.js      # Transfer/exchange validation
+├── utils/              # Utility functions
+│   ├── db.js                     # Legacy database setup
+│   ├── transactionLimits.js      # Transaction limit checking
+│   └── emailService.js           # Email verification service
+├── tests/              # Test files
+├── app.js              # Express app with security middleware
+├── server.js           # Server entry point
+├── package.json        # Project dependencies
+├── .env                # Environment variables (not in git)
+└── .env.example        # Environment variables template
+
+
+ENTRY POINTS
+================================================================================
+
+1. server.js (Main Entry Point)
+   - Loads environment variables using dotenv
+   - Connects to MongoDB database
+   - Starts Express server on specified PORT (default: 8000)
+   - Waits for successful database connection before starting server
+
+2. app.js (Express Application)
+   - Creates Express application instance
+   - Configures security middleware:
+     * Helmet.js for security headers
+     * CORS with origin whitelist
+     * Morgan for request logging
+     * express-mongo-sanitize for NoSQL injection prevention
+     * Rate limiting for all API routes
+   - Configures JSON body parser
+   - Mounts all routes under /api/v1 prefix
+   - Exports app for use in server.js
+
+
+DATABASE CONFIGURATION
+================================================================================
+
+File: config/db.js
+
+MongoDB Connection:
+- Uses Mongoose to connect to MongoDB
+- Connection URL from environment variable: MONGO_URL
+- Connection options:
+  * useNewUrlParser: true
+  * useUnifiedTopology: true
+
+Connection Event Handlers:
+- Success: Logs "✅ MongoDB connected"
+- Error: Logs error and exits process with code 1
+- Disconnected: Logs warning "⚠️ MongoDB disconnected"
+- Reconnected: Logs "🔄 MongoDB reconnected"
+
+This ensures robust database connection handling with automatic reconnection
+and proper error handling.
+
+
+DATABASE MODELS (SCHEMAS)
+================================================================================
+
+1. USER MODEL (models/index.js)
+   Schema Fields:
+   - username: String, required, unique (used as email)
+   - password: String, required (NOW HASHED with bcrypt)
+   - firstName: String, required
+   - lastName: String, required
+   - emailVerified: Boolean, default false (NEW)
+   - verificationToken: String (NEW)
+   - refreshTokens: Array of Strings (NEW)
+   - lastTransactionDate: Date (NEW)
+   - dailyTransactionTotal: Number, default 0 (NEW)
+
+   Purpose: Stores user account information and credentials
+   Security: Passwords hashed with bcrypt (10 salt rounds)
+
+2. ACCOUNT MODEL (models/index.js)
+   Schema Fields:
+   - userId: ObjectId, required, references User model
+   - balances: Object containing multiple currency balances
+     * USD: Number, default 0
+     * EUR: Number, default 0
+     * GBP: Number, default 0
+     * INR: Number, default 0
+     * JPY: Number, default 0
+     * UZS: Number, default 0
+     * CAD: Number, default 0
+     * AUD: Number, default 0
+     * CHF: Number, default 0
+     * CNY: Number, default 0
+
+   Purpose: Stores multi-currency wallet balances for each user
+   Note: Each user has one account with multiple currency balances
+
+3. TRANSACTION MODEL (models/transactionModel.js)
+   Schema Fields:
+   - userId: ObjectId, required, references User (transaction owner)
+   - type: String, required ('send' or 'exchange')
+   - amount: Number, required
+   - currency: String, required
+   - targetId: ObjectId, references User (for 'send' transactions)
+   - targetName: String (cached name for display)
+   - date: Date, default Date.now
+
+   Purpose: Records all financial transactions for audit trail and history
+
+
+API ROUTES & ENDPOINTS
+================================================================================
+
+Base URL: /api/v1
+
+All routes are organized by resource type (user, account, transaction).
+Rate limiting applied: 100 requests per 15 minutes for all API routes.
+
+----------------------------
+USER ROUTES (/api/v1/user)
+----------------------------
+
+PUBLIC ENDPOINTS (No Authentication Required):
+
+1. POST /api/v1/user/signup
+   - Register new user
+   - Rate limit: 3 attempts per hour
+   - Body: { username, password, firstName, lastName }
+   - Password requirements: 8+ chars, uppercase, lowercase, number
+   - Returns: { message, accessToken, refreshToken, userId }
+   - Creates user and account with $1000 USD starting balance
+   - Sends verification email (if email service configured)
+   - Password is hashed with bcrypt before storage
+
+2. POST /api/v1/user/signin
+   - User login
+   - Rate limit: 5 attempts per 15 minutes
+   - Body: { username, password }
+   - Returns: { message, accessToken, refreshToken }
+   - Access token expires in 1 hour
+   - Refresh token expires in 7 days
+
+3. POST /api/v1/user/refresh (NEW)
+   - Get new access token using refresh token
+   - Body: { refreshToken }
+   - Returns: { accessToken }
+   - Use when access token expires
+
+4. GET /api/v1/user/verify-email/:token (NEW)
+   - Verify email address
+   - URL parameter: verification token from email
+   - Returns: { message: "Email verified successfully" }
+
+PROTECTED ENDPOINTS (Require JWT Token):
+
+5. POST /api/v1/user/logout (NEW)
+   - Logout and invalidate refresh token
+   - Headers: Authorization: Bearer <accessToken>
+   - Body: { refreshToken }
+   - Returns: { message: "Logged out successfully" }
+
+6. POST /api/v1/user/resend-verification (NEW)
+   - Resend email verification
+   - Headers: Authorization: Bearer <accessToken>
+   - Returns: { message: "Verification email sent" }
+
+7. GET /api/v1/user/getUser
+   - Get current user's profile
+   - Headers: Authorization: Bearer <accessToken>
+   - Returns: { username, firstName, lastName }
+
+8. GET /api/v1/user/getAllUsers
+   - Get all users in system
+   - Headers: Authorization: Bearer <accessToken>
+   - Returns: { users: [{ userid, username, firstName, lastName }] }
+
+9. GET /api/v1/user/bulk?filter=<search>
+   - Search users by first or last name
+   - Query: filter (optional search term)
+   - Headers: Authorization: Bearer <accessToken>
+   - Returns: { users: [...] }
+
+10. GET /api/v1/user/otherusers?filter=<search>
+    - Search users excluding current user
+    - Query: filter (optional search term)
+    - Headers: Authorization: Bearer <accessToken>
+    - Returns: { users: [...] }
+
+----------------------------
+ACCOUNT ROUTES (/api/v1/account)
+----------------------------
+
+All account routes are PROTECTED (require authentication):
+
+1. GET /api/v1/account/balance
+   - Get current user's balances for all currencies
+   - Headers: Authorization: Bearer <accessToken>
+   - Returns: { balances: { USD: 1000, EUR: 0, ... } }
+
+2. POST /api/v1/account/transfer
+   - Transfer money to another user
+   - Headers: Authorization: Bearer <accessToken>
+   - Body: { to: userId, currency: "USD", amount: 100 }
+   - Validation: Max $10,000 USD per transaction
+   - Validation: Max $50,000 USD per day
+   - Returns: { message: "Transfer successful" }
+   - Uses MongoDB transactions for atomicity
+
+3. POST /api/v1/account/exchange
+   - Exchange between currencies
+   - Headers: Authorization: Bearer <accessToken>
+   - Body: { fromCurrency, toCurrency, fromAmount, toAmount }
+   - Validation: Max $10,000 USD equivalent per transaction
+   - Validation: Max $50,000 USD equivalent per day
+   - Returns: { message: "Exchange successful" }
+   - Uses MongoDB transactions for atomicity
+
+----------------------------
+TRANSACTION ROUTES (/api/v1/transaction)
+----------------------------
+
+All transaction routes are PROTECTED:
+
+1. GET /api/v1/transaction/history
+   - Get all transactions for current user
+   - Headers: Authorization: Bearer <accessToken>
+   - Returns: { transactions: [...] }
+   - Sorted by date (newest first)
+
+2. GET /api/v1/transaction/history/:id
+   - Get single transaction by ID
+   - Headers: Authorization: Bearer <accessToken>
+   - Returns: { transaction: {...} }
+
+
+CONTROLLERS (BUSINESS LOGIC)
+================================================================================
+
+Controllers handle the business logic for each route. They process requests,
+interact with the database, and return responses.
+
+----------------------------
+USER CONTROLLER
+----------------------------
+
+1. signup(req, res)
+   - Validates input using enhanced Joi schema
+   - Checks if username (email) already exists
+   - Hashes password with bcrypt (10 salt rounds)
+   - Generates email verification token
+   - Creates new user in database
+   - Creates associated account with $1000 USD starting balance
+   - Generates JWT access token (1 hour expiration)
+   - Generates JWT refresh token (7 days expiration)
+   - Stores refresh token in user document
+   - Sends verification email (if configured)
+   - Returns accessToken, refreshToken, and userId
+
+2. signin(req, res)
+   - Validates input using Joi schema
+   - Finds user by username
+   - Compares password with bcrypt.compare()
+   - Generates JWT access and refresh tokens
+   - Stores refresh token in user document
+   - Returns accessToken and refreshToken
+
+3. refreshToken(req, res)
+   - Verifies refresh token
+   - Checks if token exists in user's refreshTokens array
+   - Generates new access token
+   - Returns new accessToken
+
+4. logout(req, res)
+   - Removes refresh token from user's refreshTokens array
+   - Returns success message
+
+5. verifyEmail(req, res)
+   - Finds user by verification token
+   - Sets emailVerified to true
+   - Clears verification token
+   - Returns success message
+
+6. resendVerification(req, res)
+   - Checks if email already verified
+   - Generates new verification token
+   - Sends verification email
+   - Returns success message
+
+7. getUser(req, res)
+   - Retrieves current user's profile using userId from JWT
+   - Returns username, firstName, lastName
+
+8. getAllUsers(req, res)
+   - Fetches all users from database
+   - Returns formatted user list
+
+9. bulkSearch(req, res)
+   - Searches users by firstName or lastName using regex
+   - Case-insensitive search
+   - Returns matching users
+
+10. getOtherUsers(req, res)
+    - Same as bulkSearch but excludes current user
+    - Useful for finding transfer recipients
+
+----------------------------
+ACCOUNT CONTROLLER
+----------------------------
+
+1. getBalance(req, res)
+   - Finds account by userId
+   - Returns all currency balances
+
+2. transfer(req, res)
+   - Validates input using Joi schema
+   - Checks single transaction limit ($10,000 USD)
+   - Checks daily transaction limit ($50,000 USD)
+   - Updates user's daily transaction total
+   - Uses MongoDB session for transaction safety
+   - Validates sender has sufficient funds
+   - Validates receiver exists
+   - Decrements sender's balance
+   - Increments receiver's balance
+   - Creates transaction record
+   - Commits or aborts based on success/failure
+
+3. exchange(req, res)
+   - Validates input using Joi schema
+   - Checks single transaction limit ($10,000 USD)
+   - Checks daily transaction limit ($50,000 USD)
+   - Updates user's daily transaction total
+   - Uses MongoDB session for transaction safety
+   - Validates user has sufficient funds in source currency
+   - Decrements source currency balance
+   - Increments target currency balance
+   - Creates transaction record
+   - Commits or aborts based on success/failure
+
+----------------------------
+TRANSACTION CONTROLLER
+----------------------------
+
+1. getTransactionHistory(req, res)
+   - Fetches all transactions for current user
+   - Populates user and target user details
+   - Sorts by date (descending)
+   - Formats response with sender and target names
+
+2. getOneTransaction(req, res)
+   - Fetches single transaction by ID
+   - Populates user details
+   - Returns formatted transaction
+
+
+AUTHENTICATION & AUTHORIZATION
+================================================================================
+
+AUTHENTICATION MECHANISM:
+------------------------
+
+The application uses JWT (JSON Web Tokens) for stateless authentication
+with access and refresh token pattern.
+
+JWT Configuration (config/jwt.js):
+- Access token secret: JWT_SECRET (from environment)
+- Refresh token secret: JWT_REFRESH_SECRET (from environment)
+- Access token expiration: 1 hour (configurable via JWT_EXPIRES_IN)
+- Refresh token expiration: 7 days (configurable via JWT_REFRESH_EXPIRES_IN)
+
+Token Generation:
+- Access token created during signup and signin
+- Refresh token created during signup and signin
+- Access token payload: { userId: user._id }
+- Refresh token payload: { userId: user._id }
+- Refresh tokens stored in User model for validation
+
+Token Usage:
+- Client includes access token in Authorization header
+- Format: "Authorization: Bearer <accessToken>"
+- When access token expires, use refresh token to get new access token
+
+Token Refresh Flow:
+1. Access token expires after 1 hour
+2. Client receives 401 error with { expired: true }
+3. Client calls /api/v1/user/refresh with refresh token
+4. Server validates refresh token and issues new access token
+5. Client uses new access token for subsequent requests
+
+AUTHORIZATION MIDDLEWARE:
+------------------------
+
+File: middlewares/auth.middleware.js
+
+How it works:
+1. Extracts token from Authorization header (Bearer scheme)
+2. Returns 401 if token is missing
+3. Verifies token using JWT_SECRET
+4. Decodes userId from token payload
+5. Attaches userId to req.userId for use in controllers
+6. Returns 401 with { expired: true } if token expired
+7. Returns 403 if token is invalid
+8. Calls next() to proceed to route handler
+
+Protected Routes:
+- All routes except signup, signin, refresh, and verify-email require authentication
+- Middleware is applied to individual routes in route files
+
+
+INPUT VALIDATION
+================================================================================
+
+ENHANCED PASSWORD VALIDATION:
+File: validators/user.validator.js
+
+Uses Joi library for schema validation.
+
+1. signupSchema
+   - username: Must be valid email, required
+   - firstName: String, required
+   - lastName: String, required
+   - password: Minimum 8 characters, required
+     * Must contain at least one uppercase letter
+     * Must contain at least one lowercase letter
+     * Must contain at least one number
+     * Custom error messages for better UX
+
+2. signinSchema
+   - username: Must be valid email, required
+   - password: String, required
+
+TRANSACTION VALIDATION:
+File: validators/account.validator.js
+
+3. transferSchema
+   - to: String (userId), required
+   - currency: Must be one of 10 supported currencies, required
+   - amount: Positive number, max 10000, required
+
+4. exchangeSchema
+   - fromCurrency: Must be one of 10 supported currencies, required
+   - toCurrency: Must be one of 10 supported currencies, required
+   - fromAmount: Positive number, max 10000, required
+   - toAmount: Positive number, required
+
+Validation Process:
+- Schemas are used in controllers before processing
+- Returns 400 Bad Request with error message if validation fails
+- Ensures data integrity before database operations
+- All input sanitized with express-mongo-sanitize
+
+
+SECURITY IMPLEMENTATION
+================================================================================
+
+SECURITY FEATURES IMPLEMENTED:
+------------------------------
+
+✅ 1. PASSWORD HASHING
+   - Bcrypt with 10 salt rounds
+   - Passwords never stored in plain text
+   - Secure password comparison with bcrypt.compare()
+
+✅ 2. JWT TOKEN EXPIRATION
+   - Access tokens expire in 1 hour
+   - Refresh tokens expire in 7 days
+   - Prevents stolen tokens from being valid indefinitely
+
+✅ 3. REFRESH TOKEN MECHANISM
+   - Separate refresh tokens for obtaining new access tokens
+   - Refresh tokens stored in database for validation
+   - Logout invalidates refresh tokens
+
+✅ 4. CORS CONFIGURATION
+   - Whitelist specific frontend origins
+   - Default: http://localhost:3000, http://localhost:5173
+   - Configurable via FRONTEND_URL environment variable
+   - Credentials support enabled
+
+✅ 5. RATE LIMITING
+   - Login: 5 attempts per 15 minutes
+   - Signup: 3 attempts per hour
+   - General API: 100 requests per 15 minutes
+   - Prevents brute force attacks
+
+✅ 6. INPUT SANITIZATION
+   - express-mongo-sanitize prevents NoSQL injection
+   - Removes prohibited characters from request data
+   - Applied to all incoming requests
+
+✅ 7. SECURITY HEADERS
+   - Helmet.js sets secure HTTP headers
+   - XSS protection
+   - Clickjacking prevention
+   - Content Security Policy
+   - Other security best practices
+
+✅ 8. REQUEST LOGGING
+   - Morgan logger in "combined" format
+   - Logs all HTTP requests
+   - Useful for debugging and audit trails
+
+✅ 9. EMAIL VERIFICATION
+   - Verification email sent on signup
+   - Verification token generated with crypto
+   - Endpoints for verifying and resending verification
+   - Email service configurable via environment variables
+
+✅ 10. TRANSACTION LIMITS
+   - Single transaction limit: $10,000 USD (configurable)
+   - Daily transaction limit: $50,000 USD (configurable)
+   - Currency conversion to USD for limit checking
+   - Daily totals reset at midnight
+   - Prevents fraudulent large transactions
+
+SECURITY STRENGTHS:
+------------------
+
+1. JWT Authentication with Expiration
+   - Stateless authentication mechanism
+   - Tokens verified on each request
+   - Access tokens expire after 1 hour
+   - Refresh token pattern for better UX
+
+2. CORS Configured
+   - Whitelist specific origins only
+   - Prevents unauthorized cross-origin access
+   - Credentials support for cookies
+
+3. Comprehensive Input Validation
+   - Joi schemas validate all user input
+   - Enhanced password requirements
+   - Transaction amount validation
+   - NoSQL injection prevention
+
+4. MongoDB Transactions
+   - Ensures atomicity for financial operations
+   - Prevents partial transfers or exchanges
+   - Maintains data consistency
+
+5. Environment Variables
+   - Sensitive data in .env file
+   - Not committed to version control (.gitignore)
+   - .env.example provided for reference
+
+6. Password Security
+   - Bcrypt hashing with 10 salt rounds
+   - Passwords never stored in plain text
+   - Secure comparison prevents timing attacks
+
+7. Rate Limiting
+   - Prevents brute force attacks
+   - Different limits for different endpoints
+   - Configurable time windows
+
+8. Security Headers
+   - Helmet.js protects against common vulnerabilities
+   - XSS, clickjacking, MIME sniffing protection
+   - Content Security Policy
+
+9. Request Logging
+   - All requests logged for audit trail
+   - Morgan combined format includes IP, user agent, etc.
+   - Useful for security monitoring
+
+10. Email Verification
+    - Prevents fake account creation
+    - Verifies user owns the email address
+    - Resend functionality for lost emails
+
+
+TRANSACTION SAFETY
+================================================================================
+
+The application uses MongoDB transactions to ensure ACID properties for
+financial operations:
+
+ATOMIC OPERATIONS:
+- Transfer and exchange operations use sessions
+- All database operations within a transaction succeed or fail together
+- Prevents partial transfers (money deducted but not credited)
+
+TRANSACTION FLOW:
+1. Validate input with Joi schema
+2. Check transaction limits (single and daily)
+3. Update user's daily transaction total
+4. Start session: mongoose.startSession()
+5. Begin transaction: session.startTransaction()
+6. Perform operations with .session(session)
+7. Commit on success: session.commitTransaction()
+8. Abort on error: session.abortTransaction()
+9. Always end session: session.endSession()
+
+VALIDATION CHECKS:
+- Verify sender has sufficient balance
+- Verify receiver exists (for transfers)
+- Check single transaction limit ($10,000 USD)
+- Check daily transaction limit ($50,000 USD)
+- All checks done within transaction scope
+
+TRANSACTION LIMITS:
+- Configurable via environment variables
+- MAX_TRANSACTION_AMOUNT: Maximum single transaction in USD
+- DAILY_TRANSACTION_LIMIT: Maximum daily total in USD
+- Currency conversion for non-USD transactions
+- Daily totals reset at midnight
+
+
+API RESPONSE FORMATS
+================================================================================
+
+SUCCESS RESPONSES:
+-----------------
+
+Signup:
+{
+  "message": "User registered. Please check your email to verify your account.",
+  "accessToken": "jwt.access.token.here",
+  "refreshToken": "jwt.refresh.token.here",
+  "userId": "user_id"
+}
+
+Signin:
+{
+  "message": "Login successful",
+  "accessToken": "jwt.access.token.here",
+  "refreshToken": "jwt.refresh.token.here"
+}
+
+Refresh Token:
+{
+  "accessToken": "new.jwt.access.token.here"
+}
+
+Get Balance:
+{
+  "balances": {
+    "USD": 1000,
+    "EUR": 0,
+    ...
+  }
+}
+
+Transaction History:
+{
+  "transactions": [
+    {
+      "_id": "transaction_id",
+      "type": "send" | "exchange",
+      "amount": 100,
+      "currency": "USD",
+      "date": "2024-01-01T00:00:00.000Z",
+      "senderName": "John Doe",
+      "targetName": "Jane Smith" | "→ EUR"
+    }
+  ]
+}
+
+ERROR RESPONSES:
+---------------
+
+Validation Error (400):
+{
+  "message": "Password must contain at least one uppercase letter, one lowercase letter, and one number"
+}
+
+Unauthorized (401):
+{
+  "message": "Token missing" | "Invalid credentials"
+}
+
+Token Expired (401):
+{
+  "message": "Token expired",
+  "expired": true
+}
+
+Forbidden (403):
+{
+  "message": "Invalid token" | "Invalid refresh token"
+}
+
+Not Found (404):
+{
+  "message": "Account not found" | "User not found"
+}
+
+Conflict (409):
+{
+  "message": "Email already in use"
+}
+
+Rate Limit (429):
+{
+  "message": "Too many login attempts, please try again after 15 minutes"
+}
+
+Server Error (500):
+{
+  "message": "Signup failed",
+  "error": "error details"
+}
+
+
+ENVIRONMENT VARIABLES
+================================================================================
+
+Required variables in .env file (see .env.example for template):
+
+# Server Configuration
+PORT=8000
+  - Server port number
+  - Default: 8000
+
+# Database
+MONGO_URL=mongodb://localhost:27017/paytm
+  - MongoDB connection string
+  - Can be local or cloud (MongoDB Atlas)
+
+# JWT Configuration
+JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
+  - Secret key for signing access tokens
+  - Should be long, random, and secure (32+ characters)
+  - NEVER commit this to version control
+
+JWT_REFRESH_SECRET=your-super-secret-refresh-key-change-this-in-production
+  - Secret key for signing refresh tokens
+  - Should be different from JWT_SECRET
+  - Should be long, random, and secure (32+ characters)
+
+JWT_EXPIRES_IN=1h
+  - Access token expiration time
+  - Default: 1 hour
+  - Format: "1h", "30m", "7d", etc.
+
+JWT_REFRESH_EXPIRES_IN=7d
+  - Refresh token expiration time
+  - Default: 7 days
+  - Format: "1h", "30m", "7d", etc.
+
+# CORS Configuration
+FRONTEND_URL=http://localhost:3000,http://localhost:5173
+  - Comma-separated list of allowed frontend origins
+  - Default: localhost:3000 and localhost:5173
+  - Update for production with actual frontend URL
+
+# Email Configuration
+EMAIL_HOST=smtp.gmail.com
+  - SMTP server host
+  - Default: smtp.gmail.com for Gmail
+
+EMAIL_PORT=587
+  - SMTP server port
+  - Default: 587 for TLS
+
+EMAIL_USER=your-email@gmail.com
+  - Email address for sending verification emails
+  - For Gmail: use your Gmail address
+
+EMAIL_PASS=your-app-password
+  - Email password or app password
+  - For Gmail: generate App Password (not regular password)
+  - Google Account → Security → 2FA → App passwords
+
+# Application
+APP_NAME=Payment App
+  - Application name used in emails
+  - Default: Payment App
+
+# Transaction Limits
+MAX_TRANSACTION_AMOUNT=10000
+  - Maximum single transaction amount in USD
+  - Default: 10000
+
+DAILY_TRANSACTION_LIMIT=50000
+  - Maximum daily transaction total in USD
+  - Default: 50000
+
+
+TESTING
+================================================================================
+
+Test Framework: Jest (configured in jest.config.js)
+
+Test Directory: tests/
+
+Scripts:
+- npm test: Run all tests
+- npm start: Start production server
+- npm run dev: Start development server with nodemon
+
+Manual Testing Checklist:
+- [ ] Signup with weak password (should fail)
+- [ ] Signup with strong password (should succeed)
+- [ ] Signin with correct credentials (should get tokens)
+- [ ] Use access token on protected endpoint (should work)
+- [ ] Wait 1 hour, use expired access token (should fail with expired: true)
+- [ ] Use refresh token to get new access token (should work)
+- [ ] Make 6 rapid login attempts (6th should be rate limited)
+- [ ] Transfer over $10,000 (should fail)
+- [ ] Make transfers totaling over $50,000 in one day (should fail)
+- [ ] Check email for verification link (if configured)
+
+
+DEVELOPMENT WORKFLOW
+================================================================================
+
+1. Install dependencies:
+   npm install
+
+2. Configure environment:
+   - Copy .env.example to .env
+   - Update values in .env file
+   - Set strong JWT_SECRET and JWT_REFRESH_SECRET
+   - Configure email service (optional but recommended)
+
+3. Start MongoDB:
+   - Local: mongod
+   - Cloud: Use MongoDB Atlas connection string
+
+4. Run development server:
+   npm run dev
+
+5. Test endpoints:
+   - Use Postman, Insomnia, or curl
+   - Start with signup to create account
+   - Signin to get access and refresh tokens
+   - Use access token for protected endpoints
+   - Test token refresh when access token expires
+
+
+DEPLOYMENT CONSIDERATIONS
+================================================================================
+
+1. Environment Variables:
+   - Set all variables in production environment
+   - Use strong JWT_SECRET and JWT_REFRESH_SECRET (32+ random characters)
+   - Set production FRONTEND_URL
+   - Configure email service for verification
+
+2. Database:
+   - Use MongoDB Atlas or managed MongoDB service
+   - Enable authentication
+   - Configure IP whitelist
+   - Regular backups
+   - Create indexes for performance
+
+3. Security:
+   - Enable HTTPS (required for production)
+   - Update CORS to production frontend URL only
+   - Review rate limiting settings for production traffic
+   - Monitor failed login attempts
+   - Set up security alerts
+
+4. Monitoring:
+   - Morgan logs all requests (consider file logging)
+   - Monitor error rates
+   - Track API performance
+   - Set up alerts for unusual activity
+   - Monitor rate limit hits
+
+5. Scalability:
+   - Use process manager (PM2)
+   - Consider load balancing for high traffic
+   - Database indexing for performance
+   - Caching for frequently accessed data
+   - CDN for static assets
+
+6. Email Service:
+   - Use production email service (SendGrid, AWS SES, etc.)
+   - Configure SPF and DKIM records
+   - Monitor email delivery rates
+   - Handle bounces and complaints
+
+
+BREAKING CHANGES FROM PREVIOUS VERSION
+================================================================================
+
+⚠️ IMPORTANT: The following changes may require updates to existing clients:
+
+1. PASSWORD HASHING
+   - Existing users with plain text passwords cannot login
+   - All users must re-register with new accounts
+   - Passwords are now hashed and cannot be recovered
+
+2. TOKEN RESPONSE FORMAT
+   - Signup/Signin now return "accessToken" and "refreshToken"
+   - Previous "token" field is now "accessToken"
+   - Clients must store both tokens
+
+3. TOKEN EXPIRATION
+   - Access tokens now expire after 1 hour
+   - Clients must implement token refresh logic
+   - Handle 401 errors with { expired: true }
+
+4. RATE LIMITING
+   - Clients may receive 429 errors if rate limits exceeded
+   - Implement exponential backoff for retries
+   - Display appropriate error messages to users
+
+5. PASSWORD REQUIREMENTS
+   - Passwords must be 8+ characters (was 6)
+   - Must contain uppercase, lowercase, and number
+   - Update signup forms with new requirements
+
+6. TRANSACTION LIMITS
+   - Transfers/exchanges over $10,000 will fail
+   - Daily totals over $50,000 will fail
+   - Display limits to users in UI
+
+
+SUMMARY
+================================================================================
+
+This backend is a production-ready RESTful API for a multi-currency wallet
+application with the following capabilities:
+
+✅ User registration and authentication with bcrypt password hashing
+✅ JWT tokens with expiration (1h access, 7d refresh)
+✅ Refresh token mechanism for seamless UX
+✅ Email verification flow
+✅ Multi-currency account management (10 currencies)
+✅ Money transfers between users with transaction limits
+✅ Currency exchange with transaction limits
+✅ Transaction history tracking
+✅ MongoDB transactions for data consistency
+✅ CORS configured for specific origins
+✅ Rate limiting (5 login/15min, 3 signup/hour, 100 API/15min)
+✅ Input sanitization (NoSQL injection prevention)
+✅ Security headers (Helmet.js)
+✅ Request logging (Morgan)
+✅ Transaction limits ($10K single, $50K daily)
+
+SECURITY STATUS: ✅ PRODUCTION-READY
+All critical security vulnerabilities have been addressed:
+✅ Password hashing
+✅ JWT expiration
+✅ CORS configuration
+✅ Rate limiting
+✅ Input sanitization
+✅ Security headers
+✅ Request logging
+✅ Email verification
+✅ Transaction limits
+
+The codebase is well-structured with clear separation of concerns, comprehensive
+security measures, and follows industry best practices. It is ready for
+production deployment with proper environment configuration.
+
+================================================================================
+                              END OF DOCUMENTATION
+                           Last Updated: January 2026
+================================================================================

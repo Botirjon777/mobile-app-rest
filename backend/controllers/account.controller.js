@@ -1,6 +1,8 @@
 const mongoose = require("mongoose");
 const { Account, User } = require("../models");
 const Transaction = require("../models/transactionModel");
+const { transferSchema, exchangeSchema } = require("../validators/account.validator");
+const { checkTransactionLimit, checkDailyLimit } = require("../utils/transactionLimits");
 
 exports.getBalance = async (req, res) => {
   try {
@@ -15,10 +17,38 @@ exports.getBalance = async (req, res) => {
 
 exports.transfer = async (req, res) => {
   const { to, currency, amount } = req.body;
+  
+  // Validate input
+  const { error } = transferSchema.validate(req.body);
+  if (error) {
+    return res.status(400).json({ message: error.details[0].message });
+  }
+  
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
+    // Check transaction limit
+    const limitCheck = checkTransactionLimit(amount, currency);
+    if (!limitCheck.valid) {
+      await session.abortTransaction();
+      return res.status(400).json({ message: limitCheck.message });
+    }
+    
+    // Get sender user for daily limit check
+    const senderUser = await User.findById(req.userId).session(session);
+    if (!senderUser) {
+      await session.abortTransaction();
+      return res.status(404).json({ message: "User not found" });
+    }
+    
+    // Check daily limit
+    const dailyCheck = await checkDailyLimit(senderUser, amount, currency);
+    if (!dailyCheck.valid) {
+      await session.abortTransaction();
+      return res.status(400).json({ message: dailyCheck.message });
+    }
+    
     const sender = await Account.findOne({ userId: req.userId }).session(
       session
     );
@@ -73,10 +103,38 @@ exports.transfer = async (req, res) => {
 
 exports.exchange = async (req, res) => {
   const { fromCurrency, toCurrency, fromAmount, toAmount } = req.body;
+  
+  // Validate input
+  const { error } = exchangeSchema.validate(req.body);
+  if (error) {
+    return res.status(400).json({ message: error.details[0].message });
+  }
+  
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
+    // Check transaction limit
+    const limitCheck = checkTransactionLimit(fromAmount, fromCurrency);
+    if (!limitCheck.valid) {
+      await session.abortTransaction();
+      return res.status(400).json({ message: limitCheck.message });
+    }
+    
+    // Get user for daily limit check
+    const user = await User.findById(req.userId).session(session);
+    if (!user) {
+      await session.abortTransaction();
+      return res.status(404).json({ message: "User not found" });
+    }
+    
+    // Check daily limit
+    const dailyCheck = await checkDailyLimit(user, fromAmount, fromCurrency);
+    if (!dailyCheck.valid) {
+      await session.abortTransaction();
+      return res.status(400).json({ message: dailyCheck.message });
+    }
+    
     const account = await Account.findOne({ userId: req.userId }).session(
       session
     );

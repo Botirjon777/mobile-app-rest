@@ -6,6 +6,11 @@ const userSchema = new mongoose.Schema({
   password: { type: String, required: true },
   firstName: { type: String, required: true },
   lastName: { type: String, required: true },
+  emailVerified: { type: Boolean, default: false },
+  verificationToken: { type: String },
+  refreshTokens: [{ type: String }],
+  lastTransactionDate: { type: Date },
+  dailyTransactionTotal: { type: Number, default: 0 },
 });
 
 // Account Schema with balances per currency
